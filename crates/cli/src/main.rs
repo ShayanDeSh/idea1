@@ -1,12 +1,13 @@
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use idea1_backend_candle::{CandleBackend, CandleWeights};
 use idea1_core::{
-    discover_weight_files, BackendOps, DeviceKind, GenerateRequest, Generator, LlamaConfig,
-    StrategySampler, TextTokenizer,
+    discover_weight_files, top_k_logits, BackendOps, CausalLm, DeviceKind, GenerateRequest,
+    Generator, LlamaConfig, Sampler, StrategySampler, TensorOps, TextTokenizer,
 };
 use idea1_models_llama::LlamaModel;
 
@@ -85,6 +86,52 @@ enum Commands {
         /// Do not add special tokens (e.g. BOS) when encoding the prompt
         #[arg(long, default_value_t = false)]
         no_special_tokens: bool,
+
+        /// Dump top-N last-prefill logits (token_id, logit) to stderr
+        #[arg(long)]
+        dump_prefill_top: Option<usize>,
+
+        /// Print generated token ids as JSON on stderr after generation
+        #[arg(long, default_value_t = false)]
+        print_token_ids: bool,
+    },
+
+    /// Dump top-N tokens from last-prefill logits (no decode)
+    Logits {
+        /// Directory with config.json + tokenizer.json + safetensors
+        #[arg(long)]
+        model_dir: PathBuf,
+
+        /// Prompt text
+        #[arg(long)]
+        prompt: String,
+
+        /// Number of top logits to print
+        #[arg(long, default_value_t = 5)]
+        top: usize,
+
+        /// Do not add special tokens (e.g. BOS) when encoding the prompt
+        #[arg(long, default_value_t = false)]
+        no_special_tokens: bool,
+    },
+
+    /// Informal CPU tok/s baseline (prefill vs decode)
+    Bench {
+        /// Directory with config.json + tokenizer.json + safetensors
+        #[arg(long)]
+        model_dir: PathBuf,
+
+        /// Prompt text
+        #[arg(long)]
+        prompt: String,
+
+        /// Number of new tokens to decode for the decode baseline
+        #[arg(long, default_value_t = 32)]
+        max_tokens: usize,
+
+        /// Do not add special tokens (e.g. BOS) when encoding the prompt
+        #[arg(long, default_value_t = false)]
+        no_special_tokens: bool,
     },
 }
 
@@ -107,6 +154,8 @@ fn main() -> Result<()> {
             top_p,
             seed,
             no_special_tokens,
+            dump_prefill_top,
+            print_token_ids,
         } => cmd_generate(
             model_dir,
             prompt,
@@ -116,7 +165,21 @@ fn main() -> Result<()> {
             top_p,
             seed,
             !no_special_tokens,
+            dump_prefill_top,
+            print_token_ids,
         ),
+        Commands::Logits {
+            model_dir,
+            prompt,
+            top,
+            no_special_tokens,
+        } => cmd_logits(model_dir, prompt, top, !no_special_tokens),
+        Commands::Bench {
+            model_dir,
+            prompt,
+            max_tokens,
+            no_special_tokens,
+        } => cmd_bench(model_dir, prompt, max_tokens, !no_special_tokens),
     }
 }
 
@@ -190,12 +253,153 @@ fn cmd_generate(
     top_p: Option<f32>,
     seed: u64,
     add_special_tokens: bool,
+    dump_prefill_top: Option<usize>,
+    print_token_ids: bool,
 ) -> Result<()> {
     ensure_model_dir(&model_dir)?;
 
-    let config = LlamaConfig::from_model_dir(&model_dir)
+    let (config, tokenizer, mut model) = load_model(&model_dir)?;
+    let mut sampler = StrategySampler::from_knobs(temperature, top_k, top_p, seed);
+    let request = GenerateRequest {
+        prompt,
+        max_new_tokens: max_tokens,
+        add_special_tokens,
+    };
+
+    let prompt_tokens = tokenizer
+        .encode(&request.prompt, request.add_special_tokens)
+        .context("encode prompt")?;
+
+    let mut generator = Generator::new(&config, &tokenizer, &mut model, &mut sampler);
+    let mut stdout = io::stdout();
+    let output = generator
+        .generate_from_tokens_stream_with_prefill(
+            &prompt_tokens,
+            request.max_new_tokens,
+            |piece| {
+                print!("{piece}");
+                stdout.flush().map_err(|err| {
+                    idea1_core::EngineError::Msg(format!("stdout flush failed: {err}"))
+                })?;
+                Ok(())
+            },
+            |logits| {
+                if let Some(k) = dump_prefill_top {
+                    dump_prefill_top_k(logits, k, &tokenizer)?;
+                }
+                Ok(())
+            },
+        )
+        .context("generate")?;
+
+    if !output.text.is_empty() && !output.text.ends_with('\n') {
+        println!();
+    }
+    eprintln!("generated_tokens: {}", output.tokens.len());
+    if print_token_ids {
+        eprintln!("token_ids: {}", serde_json::to_string(&output.tokens)?);
+        eprintln!(
+            "prompt_token_ids: {}",
+            serde_json::to_string(&output.prompt_tokens)?
+        );
+    }
+
+    Ok(())
+}
+
+fn cmd_logits(
+    model_dir: PathBuf,
+    prompt: String,
+    top: usize,
+    add_special_tokens: bool,
+) -> Result<()> {
+    ensure_model_dir(&model_dir)?;
+    let (_config, tokenizer, mut model) = load_model(&model_dir)?;
+    let prompt_tokens = tokenizer
+        .encode(&prompt, add_special_tokens)
+        .context("encode prompt")?;
+    if prompt_tokens.is_empty() {
+        bail!("prompt encoded to zero tokens");
+    }
+
+    let logits = model.prefill(&prompt_tokens).context("prefill")?;
+    let flat = logits.to_vec_f32().context("logits to host")?;
+    dump_prefill_top_k(&flat, top, &tokenizer)?;
+    Ok(())
+}
+
+fn cmd_bench(
+    model_dir: PathBuf,
+    prompt: String,
+    max_tokens: usize,
+    add_special_tokens: bool,
+) -> Result<()> {
+    ensure_model_dir(&model_dir)?;
+    let (config, tokenizer, mut model) = load_model(&model_dir)?;
+    let prompt_tokens = tokenizer
+        .encode(&prompt, add_special_tokens)
+        .context("encode prompt")?;
+    if prompt_tokens.is_empty() {
+        bail!("prompt encoded to zero tokens");
+    }
+    if max_tokens == 0 {
+        bail!("--max-tokens must be > 0 for bench");
+    }
+
+    // Warmup (not timed): one short prefill so first-touch costs don't dominate.
+    let _ = model.prefill(&prompt_tokens[..1.min(prompt_tokens.len())])?;
+
+    let t0 = Instant::now();
+    let mut logits = model.prefill(&prompt_tokens).context("timed prefill")?;
+    let prefill_secs = t0.elapsed().as_secs_f64();
+    let prefill_toks = prompt_tokens.len() as f64;
+
+    let mut sampler = StrategySampler::from_knobs(0.0, None, None, 0);
+    let mut pos = prompt_tokens.len();
+    let mut decoded = 0usize;
+    let t1 = Instant::now();
+    for _ in 0..max_tokens {
+        if pos >= config.max_seq_len {
+            break;
+        }
+        let flat = logits.to_vec_f32()?;
+        let token = sampler.sample(&flat)?;
+        if config.is_eos(token) {
+            break;
+        }
+        logits = model.decode_step(token, pos)?;
+        pos += 1;
+        decoded += 1;
+    }
+    let decode_secs = t1.elapsed().as_secs_f64();
+
+    println!("backend: candle-cpu f32");
+    println!("prompt_tokens: {}", prompt_tokens.len());
+    println!("decoded_tokens: {decoded}");
+    println!(
+        "prefill: {:.3}s  ({:.2} tok/s)",
+        prefill_secs,
+        prefill_toks / prefill_secs.max(1e-9)
+    );
+    println!(
+        "decode:  {:.3}s  ({:.2} tok/s)",
+        decode_secs,
+        decoded as f64 / decode_secs.max(1e-9)
+    );
+
+    Ok(())
+}
+
+fn load_model(
+    model_dir: &Path,
+) -> Result<(
+    LlamaConfig,
+    TextTokenizer,
+    LlamaModel<CandleBackend>,
+)> {
+    let config = LlamaConfig::from_model_dir(model_dir)
         .with_context(|| format!("load config from {}", model_dir.display()))?;
-    let tokenizer = TextTokenizer::from_model_dir(&model_dir)
+    let tokenizer = TextTokenizer::from_model_dir(model_dir)
         .with_context(|| format!("load tokenizer from {}", model_dir.display()))?;
 
     let device_kind = DeviceKind::Cpu;
@@ -206,39 +410,37 @@ fn cmd_generate(
         "loading weights from {} (dtype={dtype:?}, device=cpu)…",
         model_dir.display()
     );
-    let weights = CandleWeights::from_model_dir(&model_dir, &device, dtype)
+    let weights = CandleWeights::from_model_dir(model_dir, &device, dtype)
         .with_context(|| format!("mmap safetensors in {}", model_dir.display()))?;
-    let mut model = LlamaModel::<CandleBackend>::load(&weights, config.clone(), &device, dtype)
+    let model = LlamaModel::<CandleBackend>::load(&weights, config.clone(), &device, dtype)
         .context("load LlamaModel from weights")?;
     eprintln!(
         "loaded TinyLlama-style model: {} layers, hidden {}, vocab {}",
         config.num_hidden_layers, config.hidden_size, config.vocab_size
     );
 
-    let mut sampler = StrategySampler::from_knobs(temperature, top_k, top_p, seed);
-    let request = GenerateRequest {
-        prompt,
-        max_new_tokens: max_tokens,
-        add_special_tokens,
-    };
+    Ok((config, tokenizer, model))
+}
 
-    let mut generator = Generator::new(&config, &tokenizer, &mut model, &mut sampler);
-    let mut stdout = io::stdout();
-    let output = generator
-        .generate_stream(&request, |piece| {
-            print!("{piece}");
-            stdout.flush().map_err(|err| {
-                idea1_core::EngineError::Msg(format!("stdout flush failed: {err}"))
-            })?;
-            Ok(())
-        })
-        .context("generate")?;
-
-    if !output.text.is_empty() && !output.text.ends_with('\n') {
-        println!();
+fn dump_prefill_top_k(
+    logits: &[f32],
+    k: usize,
+    tokenizer: &TextTokenizer,
+) -> Result<(), idea1_core::EngineError> {
+    let tops = top_k_logits(logits, k);
+    eprintln!("prefill_top_{k}:");
+    for (rank, (id, logit)) in tops.iter().enumerate() {
+        let piece = tokenizer
+            .decode(&[*id], true)
+            .unwrap_or_else(|_| format!("<id={id}>"));
+        eprintln!(
+            "  #{:>2}  id={:<6}  logit={:>10.4}  {:?}",
+            rank + 1,
+            id,
+            logit,
+            piece
+        );
     }
-    eprintln!("generated_tokens: {}", output.tokens.len());
-
     Ok(())
 }
 

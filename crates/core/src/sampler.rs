@@ -99,6 +99,26 @@ fn greedy_sample(logits: &[f32]) -> EngineResult<u32> {
     Ok(best_idx as u32)
 }
 
+/// Return the top-`k` `(token_id, logit)` pairs sorted by logit descending.
+///
+/// Useful for prefill smoke dumps / debugging. `k == 0` yields an empty vec.
+pub fn top_k_logits(logits: &[f32], k: usize) -> Vec<(u32, f32)> {
+    if k == 0 || logits.is_empty() {
+        return Vec::new();
+    }
+    let k = k.min(logits.len());
+    let mut indexed: Vec<(usize, f32)> = logits.iter().copied().enumerate().collect();
+    indexed.select_nth_unstable_by(k - 1, |a, b| {
+        b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    indexed.truncate(k);
+    indexed.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    indexed
+        .into_iter()
+        .map(|(i, v)| (i as u32, v))
+        .collect()
+}
+
 fn temperature_sample(
     logits: &[f32],
     temperature: f32,
@@ -220,5 +240,14 @@ mod tests {
     fn empty_logits_error() {
         let mut s = GreedySampler;
         assert!(s.sample(&[]).is_err());
+    }
+
+    #[test]
+    fn top_k_logits_orders_descending() {
+        let tops = top_k_logits(&[1.0, 5.0, 3.0, 4.0], 2);
+        assert_eq!(tops.len(), 2);
+        assert_eq!(tops[0].0, 1);
+        assert_eq!(tops[1].0, 3);
+        assert!(tops[0].1 > tops[1].1);
     }
 }

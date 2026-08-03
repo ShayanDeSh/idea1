@@ -1,0 +1,12 @@
+{
+  "model": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+  "backend": "candle-cpu-f32",
+  "temperature": 0.0,
+  "add_special_tokens": true,
+  "max_new_tokens": 32,
+  "prompt": "<|user|>\nHello</s>\n<|assistant|>\n",
+  "prompt_token_ids": [1, 529, 29989, 1792, 29989, 29958, 13, 10994, 2, 29871, 13, 29966, 29989, 465, 22137, 29989, 29958, 13],
+  "generated_token_ids": [29907, 13946, 368, 29991, 2266, 526, 777, 6455, 310, 920, 304, 671, 278, 376, 2222, 1135, 470, 5186, 304, 29908, 313, 29966, 29989, 465, 22137, 29989, 29958, 29901, 376, 2222, 1135, 470],
+  "prefill_top5_token_ids": [29907, 29903, 8241, 29902, 2776],
+  "notes": "Generated once via idea1-infer generate --temperature 0 on Candle CPU f32 after manual smoke of coherent chat output. Re-run with --print-token-ids --dump-prefill-top 5 to refresh."
+}

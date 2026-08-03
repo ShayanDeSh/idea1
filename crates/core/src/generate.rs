@@ -102,10 +102,31 @@ impl<'a, B: BackendOps, M: CausalLm<B>, S: Sampler> Generator<'a, B, M, S> {
         &mut self,
         prompt_tokens: &[u32],
         max_new_tokens: usize,
-        mut on_text: F,
+        on_text: F,
     ) -> EngineResult<GenerateOutput>
     where
         F: FnMut(&str) -> EngineResult<()>,
+    {
+        self.generate_from_tokens_stream_with_prefill(
+            prompt_tokens,
+            max_new_tokens,
+            on_text,
+            |_| Ok(()),
+        )
+    }
+
+    /// Like [`Self::generate_from_tokens_stream`], but invokes `on_prefill_logits`
+    /// once after prefill with the flat host logits (for top-k dumps / debugging).
+    pub fn generate_from_tokens_stream_with_prefill<F, P>(
+        &mut self,
+        prompt_tokens: &[u32],
+        max_new_tokens: usize,
+        mut on_text: F,
+        mut on_prefill_logits: P,
+    ) -> EngineResult<GenerateOutput>
+    where
+        F: FnMut(&str) -> EngineResult<()>,
+        P: FnMut(&[f32]) -> EngineResult<()>,
     {
         if prompt_tokens.is_empty() {
             return Err(EngineError::model("prompt encoded to zero tokens"));
@@ -122,6 +143,11 @@ impl<'a, B: BackendOps, M: CausalLm<B>, S: Sampler> Generator<'a, B, M, S> {
         let mut generated = Vec::new();
         let mut logits = self.model.prefill(prompt_tokens)?;
         let mut pos = prompt_tokens.len();
+
+        {
+            let flat = logits.to_vec_f32()?;
+            on_prefill_logits(&flat)?;
+        }
 
         for _ in 0..max_new_tokens {
             if pos >= self.config.max_seq_len {

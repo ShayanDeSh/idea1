@@ -22,7 +22,7 @@ todos:
     status: completed
   - id: phase-6
     content: "Phase 6: Golden token tests, README, informal tok/s baseline"
-    status: pending
+    status: completed
 isProject: false
 ---
 

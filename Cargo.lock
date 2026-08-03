@@ -695,6 +695,8 @@ dependencies = [
  "candle-core",
  "idea1-backend-candle",
  "idea1-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
