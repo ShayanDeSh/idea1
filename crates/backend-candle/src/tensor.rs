@@ -52,6 +52,12 @@ impl TensorOps<CandleBackend> for CandleTensor {
             .map_err(map_err)
     }
 
+    fn from_u8(data: &[u8], shape: &[usize], device: &Device) -> EngineResult<Self> {
+        Tensor::from_slice(data, shape, device)
+            .map(Self)
+            .map_err(map_err)
+    }
+
     fn zeros(shape: &[usize], dtype: ElementDType, device: &Device) -> EngineResult<Self> {
         Tensor::zeros(shape, candle_dtype(dtype), device)
             .map(Self)
@@ -68,6 +74,14 @@ impl TensorOps<CandleBackend> for CandleTensor {
 
     fn narrow(&self, dim: usize, start: usize, len: usize) -> EngineResult<Self> {
         self.0.narrow(dim, start, len).map(Self).map_err(map_err)
+    }
+
+    fn unsqueeze(&self, dim: usize) -> EngineResult<Self> {
+        self.0.unsqueeze(dim).map(Self).map_err(map_err)
+    }
+
+    fn broadcast_as(&self, shape: &[usize]) -> EngineResult<Self> {
+        self.0.broadcast_as(shape).map(Self).map_err(map_err)
     }
 
     fn contiguous(&self) -> EngineResult<Self> {
@@ -116,6 +130,13 @@ impl TensorOps<CandleBackend> for CandleTensor {
 
     fn mul_scalar(&self, v: f64) -> EngineResult<Self> {
         (&self.0 * v).map(Self).map_err(map_err)
+    }
+
+    fn where_cond(&self, on_true: &Self, on_false: &Self) -> EngineResult<Self> {
+        self.0
+            .where_cond(&on_true.0, &on_false.0)
+            .map(Self)
+            .map_err(map_err)
     }
 
     fn to_dtype(&self, dtype: ElementDType) -> EngineResult<Self> {

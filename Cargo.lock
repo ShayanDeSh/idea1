@@ -691,6 +691,8 @@ dependencies = [
 name = "idea1-models-llama"
 version = "0.1.0"
 dependencies = [
+ "candle-core",
+ "idea1-backend-candle",
  "idea1-core",
 ]
 

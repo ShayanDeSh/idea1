@@ -1,6 +1,19 @@
-//! Llama / TinyLlama model blocks, generic over `idea1_core::BackendOps`.
+//! Llama / TinyLlama model blocks, generic over [`idea1_core::BackendOps`].
 //!
-//! Phase 0/1: crate scaffold only. Layers land in Phase 3–5.
+//! Phase 3 delivers RMSNorm (via backend), RoPE, GQA attention, SwiGLU MLP, and
+//! a pre-norm decoder layer. Full CausalLm + KV cache arrive in later phases.
+
+mod attention;
+mod layer;
+mod mlp;
+mod ops;
+mod rope;
+
+pub use attention::Attention;
+pub use layer::DecoderLayer;
+pub use mlp::Mlp;
+pub use ops::{causal_mask, dims3, dims4, masked_fill, repeat_kv};
+pub use rope::RotaryEmbedding;
 
 use idea1_core::LlamaConfig;
 
@@ -19,3 +32,6 @@ impl<B> LlamaModel<B> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

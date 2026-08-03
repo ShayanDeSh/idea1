@@ -13,7 +13,7 @@ todos:
     status: completed
   - id: phase-3
     content: "Phase 3: RMSNorm, RoPE, GQA attention, SwiGLU, decoder layer"
-    status: pending
+    status: completed
   - id: phase-4
     content: "Phase 4: KvCache + prefill/decode split with parity test"
     status: pending

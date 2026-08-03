@@ -39,9 +39,9 @@ pub fn default_dtype(kind: DeviceKind) -> ElementDType {
 pub trait BackendOps: Sized {
     type Device: Clone;
     type Tensor: TensorOps<Self>;
-    type Linear: LinearModule<Self>;
-    type Embedding: EmbeddingModule<Self>;
-    type RmsNorm: RmsNormModule<Self>;
+    type Linear: LinearModule<Self> + Clone + std::fmt::Debug;
+    type Embedding: EmbeddingModule<Self> + Clone + std::fmt::Debug;
+    type RmsNorm: RmsNormModule<Self> + Clone + std::fmt::Debug;
     type KvCache: KvCache<Self>;
 
     /// Create a device handle for `kind`.
@@ -76,6 +76,7 @@ pub trait TensorOps<B: BackendOps>: Clone + Sized {
 
     fn from_f32(data: &[f32], shape: &[usize], device: &B::Device) -> EngineResult<Self>;
     fn from_u32(data: &[u32], shape: &[usize], device: &B::Device) -> EngineResult<Self>;
+    fn from_u8(data: &[u8], shape: &[usize], device: &B::Device) -> EngineResult<Self>;
     fn zeros(shape: &[usize], dtype: ElementDType, device: &B::Device) -> EngineResult<Self>;
 
     // --- shape / layout ---
@@ -83,6 +84,8 @@ pub trait TensorOps<B: BackendOps>: Clone + Sized {
     fn reshape(&self, shape: &[usize]) -> EngineResult<Self>;
     fn transpose(&self, dim1: usize, dim2: usize) -> EngineResult<Self>;
     fn narrow(&self, dim: usize, start: usize, len: usize) -> EngineResult<Self>;
+    fn unsqueeze(&self, dim: usize) -> EngineResult<Self>;
+    fn broadcast_as(&self, shape: &[usize]) -> EngineResult<Self>;
     fn contiguous(&self) -> EngineResult<Self>;
     fn cat(tensors: &[&Self], dim: usize) -> EngineResult<Self>;
 
@@ -99,6 +102,8 @@ pub trait TensorOps<B: BackendOps>: Clone + Sized {
     fn broadcast_add(&self, rhs: &Self) -> EngineResult<Self>;
     fn broadcast_mul(&self, rhs: &Self) -> EngineResult<Self>;
     fn mul_scalar(&self, v: f64) -> EngineResult<Self>;
+    /// Element-wise select: `self` is a 0/1 mask; where mask≠0 take `on_true`, else `on_false`.
+    fn where_cond(&self, on_true: &Self, on_false: &Self) -> EngineResult<Self>;
 
     fn to_dtype(&self, dtype: ElementDType) -> EngineResult<Self>;
 

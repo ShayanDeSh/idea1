@@ -7,3 +7,7 @@ description = "Llama-family model layers (backend-generic)"
 
 [dependencies]
 idea1-core = { workspace = true }
+
+[dev-dependencies]
+idea1-backend-candle = { workspace = true }
+candle-core = { workspace = true }
