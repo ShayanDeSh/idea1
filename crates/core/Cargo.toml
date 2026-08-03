@@ -6,6 +6,7 @@ license.workspace = true
 description = "Backend traits, config, tokenizer, and generate loop for idea1"
 
 [dependencies]
+rand = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

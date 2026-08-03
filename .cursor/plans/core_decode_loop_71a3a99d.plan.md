@@ -19,7 +19,7 @@ todos:
     status: completed
   - id: phase-5
     content: "Phase 5: Full TinyLlama CausalLm + sampler + generate CLI"
-    status: pending
+    status: completed
   - id: phase-6
     content: "Phase 6: Golden token tests, README, informal tok/s baseline"
     status: pending

@@ -1,8 +1,14 @@
+use std::io::{self, Write};
 use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
-use idea1_core::{discover_weight_files, LlamaConfig, TextTokenizer};
+use idea1_backend_candle::{CandleBackend, CandleWeights};
+use idea1_core::{
+    discover_weight_files, BackendOps, DeviceKind, GenerateRequest, Generator, LlamaConfig,
+    StrategySampler, TextTokenizer,
+};
+use idea1_models_llama::LlamaModel;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -45,6 +51,41 @@ enum Commands {
         #[arg(long)]
         model_dir: PathBuf,
     },
+
+    /// Autoregressive text generation (prefill + decode)
+    Generate {
+        /// Directory with config.json + tokenizer.json + safetensors
+        #[arg(long)]
+        model_dir: PathBuf,
+
+        /// Prompt text
+        #[arg(long)]
+        prompt: String,
+
+        /// Maximum number of new tokens to generate
+        #[arg(long, default_value_t = 64)]
+        max_tokens: usize,
+
+        /// Sampling temperature; 0 = greedy (deterministic)
+        #[arg(long, default_value_t = 0.0)]
+        temperature: f32,
+
+        /// Keep only the top-k logits before sampling (temperature > 0)
+        #[arg(long)]
+        top_k: Option<usize>,
+
+        /// Nucleus sampling cumulative probability cutoff (temperature > 0)
+        #[arg(long)]
+        top_p: Option<f32>,
+
+        /// RNG seed for non-greedy sampling
+        #[arg(long, default_value_t = 42)]
+        seed: u64,
+
+        /// Do not add special tokens (e.g. BOS) when encoding the prompt
+        #[arg(long, default_value_t = false)]
+        no_special_tokens: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -57,6 +98,25 @@ fn main() -> Result<()> {
             decode,
         } => cmd_tokenize(model_dir, prompt, !no_special_tokens, decode),
         Commands::Inspect { model_dir } => cmd_inspect(model_dir),
+        Commands::Generate {
+            model_dir,
+            prompt,
+            max_tokens,
+            temperature,
+            top_k,
+            top_p,
+            seed,
+            no_special_tokens,
+        } => cmd_generate(
+            model_dir,
+            prompt,
+            max_tokens,
+            temperature,
+            top_k,
+            top_p,
+            seed,
+            !no_special_tokens,
+        ),
     }
 }
 
@@ -116,6 +176,68 @@ fn cmd_inspect(model_dir: PathBuf) -> Result<()> {
     if let Some(map) = &weights.weight_map {
         println!("weight_map_entries: {}", map.len());
     }
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cmd_generate(
+    model_dir: PathBuf,
+    prompt: String,
+    max_tokens: usize,
+    temperature: f32,
+    top_k: Option<usize>,
+    top_p: Option<f32>,
+    seed: u64,
+    add_special_tokens: bool,
+) -> Result<()> {
+    ensure_model_dir(&model_dir)?;
+
+    let config = LlamaConfig::from_model_dir(&model_dir)
+        .with_context(|| format!("load config from {}", model_dir.display()))?;
+    let tokenizer = TextTokenizer::from_model_dir(&model_dir)
+        .with_context(|| format!("load tokenizer from {}", model_dir.display()))?;
+
+    let device_kind = DeviceKind::Cpu;
+    let device = CandleBackend::new_device(device_kind).context("create Candle CPU device")?;
+    let dtype = CandleBackend::dtype_for(device_kind);
+
+    eprintln!(
+        "loading weights from {} (dtype={dtype:?}, device=cpu)…",
+        model_dir.display()
+    );
+    let weights = CandleWeights::from_model_dir(&model_dir, &device, dtype)
+        .with_context(|| format!("mmap safetensors in {}", model_dir.display()))?;
+    let mut model = LlamaModel::<CandleBackend>::load(&weights, config.clone(), &device, dtype)
+        .context("load LlamaModel from weights")?;
+    eprintln!(
+        "loaded TinyLlama-style model: {} layers, hidden {}, vocab {}",
+        config.num_hidden_layers, config.hidden_size, config.vocab_size
+    );
+
+    let mut sampler = StrategySampler::from_knobs(temperature, top_k, top_p, seed);
+    let request = GenerateRequest {
+        prompt,
+        max_new_tokens: max_tokens,
+        add_special_tokens,
+    };
+
+    let mut generator = Generator::new(&config, &tokenizer, &mut model, &mut sampler);
+    let mut stdout = io::stdout();
+    let output = generator
+        .generate_stream(&request, |piece| {
+            print!("{piece}");
+            stdout.flush().map_err(|err| {
+                idea1_core::EngineError::Msg(format!("stdout flush failed: {err}"))
+            })?;
+            Ok(())
+        })
+        .context("generate")?;
+
+    if !output.text.is_empty() && !output.text.ends_with('\n') {
+        println!();
+    }
+    eprintln!("generated_tokens: {}", output.tokens.len());
 
     Ok(())
 }

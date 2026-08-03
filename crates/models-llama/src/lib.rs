@@ -1,7 +1,7 @@
 //! Llama / TinyLlama model blocks, generic over [`idea1_core::BackendOps`].
 //!
-//! Phase 4: KV cache + prefill/decode split on [`LlamaModel`] / attention layers.
-//! Phase 5 adds sampling + the generate CLI on top of this CausalLm.
+//! [`LlamaModel`] implements [`idea1_core::CausalLm`] with KV-cached prefill/decode.
+//! Sampling and the generate CLI live in `idea1-core` / `cli`.
 
 mod attention;
 mod layer;

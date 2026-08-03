@@ -10,8 +10,8 @@ use crate::rope::RotaryEmbedding;
 
 /// TinyLlama / Llama2-style causal LM.
 ///
-/// Phase 4 wires prefill vs decode with per-layer [`KvCache`]. Weight loading from
-/// a full HF checkpoint is used by callers (Phase 5 CLI); tests build via [`Self::new`].
+/// Prefill / decode use per-layer [`KvCache`]. Load a full HF checkpoint via
+/// [`Self::load`], or assemble modules in tests with [`Self::new`].
 pub struct LlamaModel<B: BackendOps> {
     config: LlamaConfig,
     embed_tokens: B::Embedding,

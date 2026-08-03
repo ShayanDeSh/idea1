@@ -1,9 +1,11 @@
 //! Shape, KV-cache, and prefill/decode parity tests (Candle CPU).
 
+use std::path::PathBuf;
+
 use idea1_backend_candle::{CandleBackend, CandleEmbedding, CandleLinear, CandleRmsNorm, CandleTensor};
 use idea1_core::{
-    BackendOps, CausalLm, DeviceKind, ElementDType, EmbeddingModule, KvCache, LinearModule,
-    LlamaConfig, RmsNormModule, TensorOps,
+    BackendOps, CausalLm, DeviceKind, ElementDType, EmbeddingModule, GenerateRequest, Generator,
+    GreedySampler, KvCache, LinearModule, LlamaConfig, RmsNormModule, TensorOps, TextTokenizer,
 };
 
 use crate::{Attention, DecoderLayer, LlamaModel, Mlp, RotaryEmbedding, causal_mask, repeat_kv};
@@ -388,4 +390,66 @@ fn decode_grows_cache_not_full_recompute_length() {
         // a fresh full-prompt recompute buffer.
         assert_eq!(model.cache_lens(), vec![pos + 1]);
     }
+}
+
+fn fixture_tokenizer() -> TextTokenizer {
+    TextTokenizer::from_file(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/tinyllama/tokenizer.json"),
+    )
+    .unwrap()
+}
+
+#[test]
+fn greedy_generate_loop_is_deterministic() {
+    let device = cpu();
+    let mut model = tiny_model(&device);
+    // Disable EOS so we always fill max_new_tokens with this random-weight model.
+    let mut cfg = model.config().clone();
+    cfg.eos_token_ids.clear();
+    let tokenizer = fixture_tokenizer();
+    let mut sampler = GreedySampler;
+    let prompt = [3u32, 7, 11];
+
+    let mut gen = Generator::new(&cfg, &tokenizer, &mut model, &mut sampler);
+    let out1 = gen.generate_from_tokens(&prompt, 8).unwrap();
+    assert_eq!(out1.tokens.len(), 8);
+    assert_eq!(model.cache_lens(), vec![prompt.len() + out1.tokens.len()]);
+
+    // Second greedy run with a fresh model must match (temperature-0 determinism).
+    let mut model2 = tiny_model(&device);
+    let mut sampler2 = GreedySampler;
+    let mut gen2 = Generator::new(&cfg, &tokenizer, &mut model2, &mut sampler2);
+    let out2 = gen2.generate_from_tokens(&prompt, 8).unwrap();
+    assert_eq!(out1.tokens, out2.tokens);
+    assert_eq!(out1.text, out2.text);
+
+    // Streaming callback concatenates to the same text.
+    let mut model3 = tiny_model(&device);
+    let mut sampler3 = GreedySampler;
+    let mut gen3 = Generator::new(&cfg, &tokenizer, &mut model3, &mut sampler3);
+    let mut streamed = String::new();
+    let out3 = gen3
+        .generate_from_tokens_stream(&prompt, 8, |piece| {
+            streamed.push_str(piece);
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(streamed, out3.text);
+    assert_eq!(out3.tokens, out1.tokens);
+}
+
+#[test]
+fn generate_request_stops_at_max_tokens() {
+    let device = cpu();
+    let mut model = tiny_model(&device);
+    let mut cfg = model.config().clone();
+    cfg.eos_token_ids.clear();
+    let tokenizer = fixture_tokenizer();
+    let mut sampler = GreedySampler;
+    let mut gen = Generator::new(&cfg, &tokenizer, &mut model, &mut sampler);
+    let out = gen.generate_from_tokens(&[4u32, 5], 3).unwrap();
+    assert_eq!(out.tokens.len(), 3);
+    assert_eq!(out.prompt_tokens, vec![4, 5]);
+    let _ = GenerateRequest::new("hi", 3);
 }

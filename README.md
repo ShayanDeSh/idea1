@@ -8,8 +8,8 @@ First compute backend: [Candle](https://github.com/huggingface/candle) (CPU). Mo
 
 | Crate | Role |
 |-------|------|
-| `idea1-core` | Backend traits, `LlamaConfig`, tokenizer, weight discovery, sampler/generate stubs |
-| `idea1-models-llama` | Llama blocks (backend-generic; layers in later phases) |
+| `idea1-core` | Backend traits, `LlamaConfig`, tokenizer, sampler, generate loop |
+| `idea1-models-llama` | Llama blocks + `LlamaModel` (backend-generic) |
 | `idea1-backend-candle` | Candle implementation of backend traits |
 | `cli` (`idea1-infer`) | CLI binary |
 
@@ -45,24 +45,29 @@ mkdir -p models
 hf download TinyLlama/TinyLlama-1.1B-Chat-v1.0 --local-dir models/tinyllama
 ```
 
-**Memory note:** Phase 5 will load weights in f32 on CPU for correctness (~2 GB+ RAM). Keep that in mind before running generate.
+**Memory note:** `generate` loads weights in f32 on CPU for correctness (~2 GB+ RAM).
 
-## CLI (current)
+## CLI
 
 ```bash
 # Help
 cargo run -p cli -- --help
 
-# Tokenize a prompt (Phase 1)
+# Tokenize a prompt
 cargo run -p cli -- tokenize \
   --model-dir models/tinyllama \
   --prompt "Hello world"
 
 # Inspect config + weight file discovery
 cargo run -p cli -- inspect --model-dir models/tinyllama
-```
 
-`generate` arrives in a later phase.
+# Greedy generation (temperature 0)
+cargo run -p cli -- generate \
+  --model-dir models/tinyllama \
+  --prompt "<|user|>\nHello</s>\n<|assistant|>\n" \
+  --max-tokens 64 \
+  --temperature 0
+```
 
 ## Fixtures
 
