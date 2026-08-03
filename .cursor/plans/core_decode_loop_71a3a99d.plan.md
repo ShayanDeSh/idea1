@@ -10,7 +10,7 @@ todos:
     status: completed
   - id: phase-2
     content: "Phase 2: Backend traits + Candle Device/Tensor/modules/weight load"
-    status: pending
+    status: completed
   - id: phase-3
     content: "Phase 3: RMSNorm, RoPE, GQA attention, SwiGLU, decoder layer"
     status: pending

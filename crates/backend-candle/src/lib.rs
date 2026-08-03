@@ -1,27 +1,41 @@
 //! Candle backend for idea1.
 //!
-//! Phase 0/1: crate scaffold and device helper only. Tensor/module/KV
-//! implementations arrive in Phase 2.
+//! Implements [`idea1_core::BackendOps`] and related traits without exposing
+//! Candle types to `models-llama` / generate-loop code.
+
+mod device;
+mod modules;
+mod tensor;
+mod weights;
+
+pub use device::{candle_device, candle_dtype};
+pub use modules::{CandleEmbedding, CandleKvCache, CandleLinear, CandleRmsNorm};
+pub use tensor::CandleTensor;
+pub use weights::CandleWeights;
 
 use candle_core::Device;
-use idea1_core::{DeviceKind, EngineError, EngineResult};
+use idea1_core::{BackendOps, DeviceKind, ElementDType, EngineResult};
 
-/// Select a Candle [`Device`] from an idea1 [`DeviceKind`].
-pub fn candle_device(kind: DeviceKind) -> EngineResult<Device> {
-    match kind {
-        DeviceKind::Cpu => Ok(Device::Cpu),
-        DeviceKind::Cuda { device_id } => Device::new_cuda(device_id)
-            .map_err(|err| EngineError::backend(format!("CUDA device {device_id}: {err}"))),
+/// Candle implementation of [`BackendOps`].
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CandleBackend;
+
+impl BackendOps for CandleBackend {
+    type Device = Device;
+    type Tensor = CandleTensor;
+    type Linear = CandleLinear;
+    type Embedding = CandleEmbedding;
+    type RmsNorm = CandleRmsNorm;
+    type KvCache = CandleKvCache;
+
+    fn new_device(kind: DeviceKind) -> EngineResult<Self::Device> {
+        candle_device(kind)
+    }
+
+    fn dtype_for(kind: DeviceKind) -> ElementDType {
+        idea1_core::default_dtype(kind)
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn cpu_device_available() {
-        let device = candle_device(DeviceKind::Cpu).unwrap();
-        assert!(device.is_cpu());
-    }
-}
+mod ops_tests;

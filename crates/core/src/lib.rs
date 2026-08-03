@@ -9,8 +9,8 @@ pub mod tokenizer;
 pub mod weights;
 
 pub use backend::{
-    BackendOps, CausalLm, DeviceKind, EmbeddingModule, KvCache, LinearModule, RmsNormModule,
-    TensorOps,
+    default_dtype, BackendOps, CausalLm, DeviceKind, ElementDType, EmbeddingModule, KvCache,
+    LinearModule, RmsNormModule, TensorOps, WeightSource,
 };
 pub use config::{HfLlamaConfig, LlamaConfig};
 pub use error::{EngineError, EngineResult};

@@ -9,3 +9,6 @@ description = "Candle implementation of idea1 backend traits"
 idea1-core = { workspace = true }
 candle-core = { workspace = true }
 candle-nn = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
