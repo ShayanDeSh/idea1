@@ -16,7 +16,7 @@ todos:
     status: completed
   - id: phase-4
     content: "Phase 4: KvCache + prefill/decode split with parity test"
-    status: pending
+    status: completed
   - id: phase-5
     content: "Phase 5: Full TinyLlama CausalLm + sampler + generate CLI"
     status: pending

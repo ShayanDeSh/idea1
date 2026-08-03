@@ -89,24 +89,93 @@ impl RmsNormModule<CandleBackend> for CandleRmsNorm {
     }
 }
 
-/// Stub KV cache; append/read arrives in Phase 4.
+/// Growing K/V cache: concatenates along the sequence axis on each append.
+///
+/// Tensors are `[batch, n_kv_heads, seq, head_dim]` after the first write.
 #[derive(Debug, Clone, Default)]
 pub struct CandleKvCache {
+    k: Option<CandleTensor>,
+    v: Option<CandleTensor>,
     len: usize,
 }
 
 impl CandleKvCache {
-    pub fn new() -> Self {
-        Self { len: 0 }
+    fn validate_append(k: &CandleTensor, v: &CandleTensor) -> EngineResult<usize> {
+        let ks = k.shape();
+        let vs = v.shape();
+        if ks.len() != 4 || vs.len() != 4 {
+            return Err(EngineError::backend(format!(
+                "KV append expects rank-4 tensors, got k={ks:?} v={vs:?}"
+            )));
+        }
+        if ks[0] != vs[0] || ks[1] != vs[1] || ks[2] != vs[2] || ks[3] != vs[3] {
+            return Err(EngineError::backend(format!(
+                "KV append shape mismatch: k={ks:?} v={vs:?}"
+            )));
+        }
+        if ks[2] == 0 {
+            return Err(EngineError::backend("KV append seq_new must be > 0"));
+        }
+        Ok(ks[2])
+    }
+
+    fn validate_against_cached(
+        cached: &CandleTensor,
+        new: &CandleTensor,
+        name: &str,
+    ) -> EngineResult<()> {
+        let c = cached.shape();
+        let n = new.shape();
+        if c[0] != n[0] || c[1] != n[1] || c[3] != n[3] {
+            return Err(EngineError::backend(format!(
+                "KV {name} append incompatible with cache: cached={c:?} new={n:?}"
+            )));
+        }
+        Ok(())
     }
 }
 
 impl KvCache<CandleBackend> for CandleKvCache {
+    fn new() -> Self {
+        Self::default()
+    }
+
     fn reset(&mut self) {
+        self.k = None;
+        self.v = None;
         self.len = 0;
     }
 
     fn current_len(&self) -> usize {
         self.len
+    }
+
+    fn append(
+        &mut self,
+        k: &CandleTensor,
+        v: &CandleTensor,
+    ) -> EngineResult<(CandleTensor, CandleTensor)> {
+        let seq_new = Self::validate_append(k, v)?;
+
+        let (full_k, full_v) = match (&self.k, &self.v) {
+            (None, None) => (k.clone(), v.clone()),
+            (Some(prev_k), Some(prev_v)) => {
+                Self::validate_against_cached(prev_k, k, "k")?;
+                Self::validate_against_cached(prev_v, v, "v")?;
+                let full_k = CandleTensor::cat(&[prev_k, k], 2)?;
+                let full_v = CandleTensor::cat(&[prev_v, v], 2)?;
+                (full_k, full_v)
+            }
+            _ => {
+                return Err(EngineError::backend(
+                    "KV cache in inconsistent state (one of k/v missing)",
+                ));
+            }
+        };
+
+        self.len += seq_new;
+        self.k = Some(full_k.clone());
+        self.v = Some(full_v.clone());
+        Ok((full_k, full_v))
     }
 }

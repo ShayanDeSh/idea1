@@ -56,16 +56,24 @@ impl<B: BackendOps> DecoderLayer<B> {
         &self.mlp
     }
 
+    /// Create an empty KV cache for this layer's attention.
+    pub fn new_kv_cache(&self) -> B::KvCache {
+        self.self_attn.new_kv_cache()
+    }
+
     /// `x`: `[b, seq, hidden]` → same shape.
+    ///
+    /// Pass `cache` for prefill/decode; `None` recomputes attention within the chunk only.
     pub fn forward(
         &self,
         x: &B::Tensor,
         rope: &RotaryEmbedding<B>,
         index_pos: usize,
+        cache: Option<&mut B::KvCache>,
     ) -> EngineResult<B::Tensor> {
         let residual = x.clone();
         let h = self.input_layernorm.forward(x)?;
-        let h = self.self_attn.forward(&h, rope, index_pos)?;
+        let h = self.self_attn.forward(&h, rope, index_pos, cache)?;
         let h = h.add(&residual)?;
 
         let residual = h.clone();

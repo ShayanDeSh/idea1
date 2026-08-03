@@ -132,10 +132,23 @@ pub trait RmsNormModule<B: BackendOps>: Sized {
 
 /// Per-layer K/V cache used by prefill / decode.
 ///
-/// Append / read semantics arrive in Phase 4; Phase 2 only needs the stub surface.
-pub trait KvCache<B: BackendOps> {
+/// Stores post-RoPE keys and values with shape
+/// `[batch, n_kv_heads, seq, head_dim]`. Empty until the first [`append`](Self::append).
+pub trait KvCache<B: BackendOps>: Sized {
+    /// Create an empty cache (no allocated K/V yet).
+    fn new() -> Self;
+
+    /// Drop cached K/V and reset length to 0 (new request).
     fn reset(&mut self);
+
+    /// Number of positions currently stored along the sequence axis.
     fn current_len(&self) -> usize;
+
+    /// Append new K/V along the sequence dimension and return the full cache.
+    ///
+    /// `k` / `v` must be `[batch, n_kv_heads, seq_new, head_dim]` and match any
+    /// already-cached batch / head / dim sizes.
+    fn append(&mut self, k: &B::Tensor, v: &B::Tensor) -> EngineResult<(B::Tensor, B::Tensor)>;
 }
 
 /// Autoregressive LM interface used by the generate loop.

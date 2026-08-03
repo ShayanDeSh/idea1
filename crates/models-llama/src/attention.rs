@@ -1,15 +1,14 @@
-//! Grouped-query causal self-attention with RoPE.
+//! Grouped-query causal self-attention with RoPE and optional KV cache.
 
 use idea1_core::{
-    BackendOps, ElementDType, EngineResult, LinearModule, LlamaConfig, TensorOps, WeightSource,
+    BackendOps, ElementDType, EngineResult, KvCache, LinearModule, LlamaConfig, TensorOps,
+    WeightSource,
 };
 
 use crate::ops::{causal_mask, dims3, masked_fill, repeat_kv};
 use crate::rope::RotaryEmbedding;
 
 /// Causal self-attention with GQA (`num_attention_heads` Q, `num_key_value_heads` KV).
-///
-/// Phase 3: full-sequence forward with causal mask (no KV cache yet).
 #[derive(Debug, Clone)]
 pub struct Attention<B: BackendOps> {
     q_proj: B::Linear,
@@ -63,16 +62,24 @@ impl<B: BackendOps> Attention<B> {
         self.head_dim
     }
 
-    /// Prefill-style forward over a full sequence (causal mask when `seq_len > 1`).
+    /// Create an empty per-layer KV cache for this attention block.
+    pub fn new_kv_cache(&self) -> B::KvCache {
+        B::KvCache::new()
+    }
+
+    /// Forward over `x`: `[b, seq, hidden]`.
     ///
-    /// `x`: `[b, seq, hidden]`  
-    /// `rope`: shared rotary tables  
-    /// `index_pos`: absolute start position (0 for a fresh prompt)
+    /// - `cache = None`: attend only within this chunk (full recompute / tests).
+    /// - `cache = Some`: append this chunk's K/V and attend against the full cache
+    ///   (prefill writes the prompt; decode appends one position).
+    ///
+    /// `index_pos` is the absolute start position of this chunk (0 for a fresh prompt).
     pub fn forward(
         &self,
         x: &B::Tensor,
         rope: &RotaryEmbedding<B>,
         index_pos: usize,
+        cache: Option<&mut B::KvCache>,
     ) -> EngineResult<B::Tensor> {
         let (b, seq_len, hidden) = dims3::<B>(x)?;
 
@@ -90,10 +97,16 @@ impl<B: BackendOps> Attention<B> {
             .contiguous()?;
         let v = v
             .reshape(&[b, seq_len, self.num_kv_heads, self.head_dim])?
-            .transpose(1, 2)?;
+            .transpose(1, 2)?
+            .contiguous()?;
 
         let q = rope.apply(&q, index_pos)?;
         let k = rope.apply(&k, index_pos)?;
+
+        let (k, v) = match cache {
+            Some(cache) => cache.append(&k, &v)?,
+            None => (k, v),
+        };
 
         let n_rep = self.num_heads / self.num_kv_heads;
         let k = repeat_kv::<B>(&k, n_rep)?;
@@ -108,6 +121,7 @@ impl<B: BackendOps> Attention<B> {
         let scale = 1.0 / (self.head_dim as f64).sqrt();
         let att = q.matmul(&k.transpose(2, 3)?)?.mul_scalar(scale)?;
 
+        // Single-token decode attends to the full prefix; no future tokens exist.
         let att = if seq_len == 1 {
             att
         } else {
