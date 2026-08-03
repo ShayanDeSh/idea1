@@ -1,0 +1,16 @@
+/target
+**/*.rs.bk
+.DS_Store
+.env
+*.swp
+*.swo
+
+# Downloaded model weights (keep tiny fixture stub)
+/models/
+*.safetensors
+!tests/fixtures/tinyllama/model.safetensors
+
+# Editor / local
+.idea/
+.vscode/
+*.code-workspace

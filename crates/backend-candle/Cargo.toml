@@ -1,0 +1,11 @@
+[package]
+name = "idea1-backend-candle"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Candle implementation of idea1 backend traits"
+
+[dependencies]
+idea1-core = { workspace = true }
+candle-core = { workspace = true }
+candle-nn = { workspace = true }

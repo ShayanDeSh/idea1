@@ -1,0 +1,9 @@
+[package]
+name = "idea1-models-llama"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Llama-family model layers (backend-generic)"
+
+[dependencies]
+idea1-core = { workspace = true }
